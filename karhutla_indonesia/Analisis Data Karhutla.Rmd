@@ -1,0 +1,457 @@
+---
+title: <center>Analisis Data Kebakaran Hutan Indonesia (2016 - 2021)</center>
+author: <center>Suberlin Sinaga</center>
+date: <center>9/23/2021</center>
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+<style type="text/css">
+  body{
+  font-size: 14pt;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 13, fig.height = 7, message = FALSE)
+
+options(
+    scipen = 999,
+    dplyr.summarise.inform = FALSE
+)
+# importing libraries
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ggplot2)
+    library(openxlsx)
+    library(tidyr)
+    library(scales)
+    library(forcats)
+    library(hrbrthemes)
+    library(ggrepel)
+    library(ggthemes)
+    library(snakecase)
+    # library(skimr)
+    library(plotly)
+})
+```
+
+```{r import_data, warning=FALSE}
+# mengimport data utama, yaitu luas kebakaran
+luas_kebakaran <- read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "luas_kebakaran_hutan") %>% 
+    gather("tahun", "luas_kebakaran", `2016`:`2021`) %>% 
+    rename(provinsi = PROVINSI) %>% 
+    arrange(provinsi, tahun)
+
+# mengimport data emisi CO2 yang dihasilkan oleh kebakaran
+emisi_co2 <- read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "emisi_co2") %>% 
+    gather("tahun", "emisi_co2", `2016`:`2021`) %>% 
+    rename(provinsi = PROVINSI) %>% 
+    arrange(provinsi, tahun)
+
+# mengimport data lon dan lat tiap provinsi
+lonlat <- read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "lonlat")
+
+# mengimport data reboisasi per provinsi per tahun
+reboisasi_hutan <- read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "reboisasi") %>% 
+    gather("tahun", "luas_reboisasi", `2014`:`2019`) %>% 
+    arrange(provinsi, tahun) %>% 
+    mutate(luas_reboisasi = as.numeric(luas_reboisasi)) %>% 
+    mutate(luas_reboisasi = case_when(is.na(luas_reboisasi) ~ 0,
+                                      TRUE ~ as.numeric(luas_reboisasi)))
+
+luas_hutan <- readxl::read_xls("dataset/indo_60_4.xls", sheet = "data_clean") %>% 
+    rename(provinsi = Provinsi) %>% 
+    gather("tahun", "luas_hutan", `2016`:`2019`) %>% 
+    arrange(provinsi, tahun)
+
+df_hotspot <- read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2016") %>%
+    mutate(tahun = 2016) %>% 
+    gather('bulan', 'hotspot', Jan:Des) %>% 
+    rbind(read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2017") %>%
+                  mutate(tahun = 2017) %>% 
+                  gather('bulan', 'hotspot', Jan:Des)) %>% 
+    rbind(read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2018") %>%
+                  mutate(tahun = 2018) %>% 
+                  gather('bulan', 'hotspot', Jan:Des)) %>% 
+    rbind(read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2019") %>%
+                  mutate(tahun = 2019) %>% 
+                  gather('bulan', 'hotspot', Jan:Des)) %>% 
+    rbind(read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2020") %>%
+                  mutate(tahun = 2020) %>% 
+                  gather('bulan', 'hotspot', Jan:Des)) %>% 
+    rbind(read.xlsx("dataset/data_karhutla_all.xlsx", sheet = "hotspot_2021") %>%
+                  mutate(tahun = 2021) %>% 
+                  gather('bulan', 'hotspot', Jan:Des)) %>%
+    mutate(bulan = as.Date(paste0(2017,"/", bulan, "/01"), format = "%Y/%B/%d")) %>% 
+    na.omit()
+```
+
+```{r inspecting_data, eval=FALSE}
+str(luas_kebakaran)
+str(lonlat)
+str(emisi_co2)
+str(reboisasi_hutan)
+str(df_hotspot)
+str(luas_hutan)
+```
+
+```{r standardization_key_values, results='hide'}
+emisi_co2 <- emisi_co2 %>% 
+    mutate(provinsi = to_title_case(provinsi))
+
+lonlat <- lonlat %>% 
+    mutate(provinsi = to_title_case(provinsi))
+
+luas_kebakaran <- luas_kebakaran %>% 
+    mutate(provinsi = to_title_case(provinsi))
+
+reboisasi_hutan <- reboisasi_hutan %>% 
+    mutate(provinsi = to_title_case(provinsi))
+
+df_hotspot <- df_hotspot %>% 
+    mutate(provinsi = to_title_case(Provinsi)) %>% 
+    select(-Provinsi)
+
+luas_hutan <- luas_hutan %>% 
+  mutate(provinsi = to_title_case(provinsi))
+
+# Check if all values are available
+emisi_co2$provinsi[which(!emisi_co2$provinsi %in% luas_kebakaran$provinsi)] %>% unique()
+
+emisi_co2$provinsi[which(!emisi_co2$provinsi %in% lonlat$provinsi)] %>% unique()
+
+emisi_co2$provinsi[which(!emisi_co2$provinsi %in% reboisasi_hutan$provinsi)] %>% unique()
+
+emisi_co2$provinsi[which(!emisi_co2$provinsi %in% df_hotspot$provinsi)] %>% unique()
+
+emisi_co2$provinsi[which(!emisi_co2$provinsi %in% luas_hutan$provinsi)] %>% unique()
+
+# after finding the difference, apply the recoding needed
+luas_kebakaran <- luas_kebakaran %>% 
+    mutate(provinsi = recode(provinsi, Yogyakarta = "Di Yogyakarta", `Bangka Belitung` = "Kep Bangka Belitung"))
+
+reboisasi_hutan <- reboisasi_hutan %>% 
+    mutate(provinsi = recode(provinsi, `Kep Riau` = "Kepulauan Riau"))
+
+df_hotspot <- df_hotspot %>% 
+    mutate(provinsi = recode(provinsi, Yogyakarta = "Di Yogyakarta", `Bangka Belitung` = "Kep Bangka Belitung"))
+```
+    
+    
+```{r combining_data}
+df_all <- emisi_co2 %>%
+    full_join(lonlat, by = c('provinsi')) %>%
+    full_join(luas_kebakaran, by = c('provinsi', 'tahun')) %>%
+    na.omit()
+
+# TODO: Cleansing the data first before joining them all
+
+theme_set(
+    theme_minimal(base_size = 14,
+                  base_family = "calibri bold") +
+        theme(
+            plot.background = element_rect(fill = "black"),
+            text = element_text(colour = "white", face = "bold"),
+            axis.text = element_text(colour = "white", face = "bold"),
+            strip.text = element_text(colour = 'white')
+        )
+)
+
+```
+
+
+Hutan adalah paru-paru dunia. Setidaknya jargon atau slogan itu masih terus menjadi nyata selama bertahun-tahun sejarah bumi dan akan terus begitu. Hal ini tidak terlepas dari peranan hutan yang menyerap CO2 untuk kemudian menghasilkan O2 sebagai sumber pernapasan bagi makhluk hidup lainnya. Namun, pernahkah kita sadari bahwa kebakaran hutan telah membalik hubungan sebab akibat ini. Kebakaran hutan secara langsung menyebabkan hutan melepaskan gas CO2 dalam jumlah besar ke udara. Di samping itu, kebakaran hutan juga menmusnahkan converter alami CO2 menjadi O2, yaitu flora.
+
+```{r}
+df_all %>% 
+    group_by(provinsi, lon, lat) %>%
+    summarize(luas_kebakaran = sum(luas_kebakaran),
+              emisi_co2 = sum(emisi_co2)) %>% 
+    ggplot(aes(x = lon, y = lat)) +
+    geom_polygon(data = map_data("world", region = "Indonesia"), aes(x = long, y = lat, group = group), fill = "#30F80C") +
+    geom_point(aes(size = luas_kebakaran, color = emisi_co2)) +
+    geom_text_repel(aes(label = provinsi), col = "#F39423", size = 5.5) +
+    # geom_point(aes(y = lat), col = "black", size = 0.1) +
+    scale_size_area(max_size = 16) +
+    theme(legend.text = element_text(color = "#000000"),
+        legend.title = element_text(color = "#000000"),
+        legend.key = element_rect(fill = "#ffffff"),
+        legend.background = element_rect(fill = "white", size = 4)) +
+    scale_color_gradient2(low = "#ffffff", mid = "#F47955", high = "#F34B1A", midpoint = 100000000, guide = "legend", name = "CO2 Dihasilkan (Ton)") +
+    labs(title = "Total Luas Area dan Emisi CO2 dari Kebakaran Hutan Indonesia (2016-2021)",
+         caption = "Sumber: http://sipongi.menlhk.go.id",
+         size = "Luas kebakaran (Ha)")
+```
+
+# Ratusan Ribu Ha Hutan Terbakar dan Jutaan Ton CO2 Dihasilkan Setiap Tahun
+
+```{r}
+cols <- c("Luas Kebakaran" = "red", "Emisi CO2" = "blue")
+df_all %>% 
+    group_by(tahun) %>% 
+    summarize(emisi_co2 = sum(emisi_co2), luas_kebakaran = sum(luas_kebakaran)) %>% 
+    ggplot(aes(x = tahun)) +
+    geom_line(aes(y = emisi_co2, group = 1, col = "Emisi CO2"), size = 2) +
+    geom_point(aes(y = emisi_co2), col = "blue", size = 4) +
+    geom_line(aes(y = luas_kebakaran*500, group = 1, col = "Luas Kebakaran"), size = 2) +
+    geom_point(aes(y = luas_kebakaran*500), col = "red", size = 4) +
+    geom_label(aes(y = luas_kebakaran*500, label = number_format()(luas_kebakaran)), col = "red", size = 6) +
+    geom_label(aes(y = emisi_co2, label = number_format()(emisi_co2)), col = "blue", size = 6) +
+    scale_y_continuous(sec.axis = sec_axis(~./500, name = "Luas Kebakaran (Ha)", labels = number_format()),
+                       labels = number_format()) +
+    labs(x = "Tahun Kejadian",
+         y = "Emisi CO2 (Ton)",
+         title = "Tren Emisi CO2 dan Luas Hutan Terbakar\nTahun 2016-2021",
+         col = "Keterangan:",
+         caption = "Sumber: http://sipongi.menlhk.go.id") +
+    scale_color_manual(values = cols) +
+    theme(legend.position = "bottom")
+```
+
+Data dari http://sipongi.menlhk.go.id menunjukkan bahwa selama 5 tahun terakhir (2016-2021), setiap tahunnya ratusan ribu hektar hutan di indonesia terbakar. Puncak dari kebakaran selama 5 tahun terakhir adalah pada tahun 2019. Tingginya tingkat kebakaran hutan pada 2019 ditengarai diakibatkan oleh kejadian el nino dan kebakaran di Australia yang juga terjadi pada tahun tersebut ([sumber](https://news.detik.com/abc-australia/d-4709820/belajar-dari-cara-australia-atasi-kebakaran-hutan-tanpa-air)).
+
+Tidak hanya hutan yang semakin gundul, kebakaran hutan juga menghasilkan emisi gas CO2 yang dilepaskan ke udara. Seperti yang kita ketahui bahwa gas CO2 adalah gas rumah kaca sehingga dapat memperparah pemanasan global. Setiap tahunnya, kebakaran hutan menyumbangkan jutaan ton CO2 ke lingkugan.
+
+# Bertambahnya Luas Hutan Terbakar Sebanyak 1 Ha, Meningkatkan Jumlah Emisi CO2 Sebanyak 409 Ton
+
+Salah satu penyumbang langsung emisi gas CO2 terbesar di Indonesia adalah kebakaran hutan. CO2 yang terbentuk merupakan hasil pembakaran flora dan fauna di dalamnya.
+
+```{r emisi_and_carbon_corr}
+df_all %>% 
+    ggplot(aes(emisi_co2, luas_kebakaran)) + 
+    geom_text(aes(label = provinsi), check_overlap = TRUE, col = "white", size = 6) +
+    geom_point(aes(col = tahun, size = luas_kebakaran)) +
+    guides(size = FALSE) +
+    scale_x_continuous(labels = comma_format()) + 
+    labs(title = "Kebakaran Hutan dan Emisi CO2 dari Tahun ke Tahun",
+         x = "Emisi CO2 (Ton)",
+         y = "Luas Kebakaran Hutan (Ha)",
+         caption = ("source: http://sipongi.menlhk.go.id")) +
+    geom_smooth(formula = y ~ x, method = "lm") +
+    theme(panel.grid.minor = element_blank(),
+          text = element_text(face = "bold"))
+```
+
+Dari data ini kita melihat bahwa semakin luas area kebakaran, maka semakin tinggi emisi CO2 yang dihasilkan. Ini menunjukkan fakta bahwa luas kebakaran hutan sangat jelas mempengaruhi emisi CO2 yang dihasilkan. Ketidak sempurnaan linearitas keduanya menunjukkan ada variabel lain yang mempengaruhi korelasi di antara keduanya. Variable-variabel ini bisa berupa jenis flora dan fauna yang terbakar, adanya kebakaran lain yang meningkatkan temperatur udara, fenomena el nino, dan atau berbagai faktor lainnya. Di sini penulis tidak mencari lebih detail variabel-variabel tersebut. Untuk melihat signifikansi pengaruh luas daratan yang terbakar terhadap emisi CO2 yang dihasilkan serta melihat seberapa besar pengaruhnya, kita bisa menggunakan linear model sederhana. Berikut adalah hasil summary model yang dihasilkan.
+
+```{r}
+mdl <- lm(emisi_co2 ~ luas_kebakaran, df_all)
+summary(mdl)
+```
+
+Berdasarkan pengukuran yang dilakukan oleh kementrian kehutanan yang disajikan dalam bentuk summary linear model di atas, ditemukan fakta bahwa dalam 5 tahun terakhir peningkatan 1 Ha luas kebakaran hutan akan diikuti oleh peningkatan emisi gas CO2 sebanyak 409.47 ton.
+
+Notes:
+
+1. Dalam konsep modeling, biasanya model ini tidak bisa langsung digunakan. Harus dilakukan preprocessing seperti transaformasi data dan mencari variable confounding yang terlibat. Penulis menggunakannya hanya sebagai sampel analisis dengan asumsi kejadian sudah memenuhi berbagai asumsi yang diperlukan.
+
+2. Antara kebakaran hutan dan emisi CO2 secara jelas memiliki hubungan sebab akibat, karena data CO2 disini merupakan akibat pembakaran hutan, sehingga kita bisa katakan bahwa antara kebakaran hutan dan CO2 memiliki kausasi.
+
+# Nusa Tenggara Timur Menjadi Wilayah Kebakaran Terluas Kedua Setelah Papua
+
+```{r}
+top_10_luas_wilayah <- df_all %>% 
+    group_by(provinsi) %>% 
+    summarize(luas_kebakaran = sum(luas_kebakaran)) %>% 
+    top_n(10, luas_kebakaran) %>% 
+    pull(provinsi)
+
+df_all %>% 
+    mutate(provinsi = case_when(!provinsi %in% top_10_luas_wilayah ~ "other",
+                                TRUE ~ provinsi)) %>%
+    group_by(provinsi) %>%
+    summarize(luas_kebakaran = sum(luas_kebakaran)) %>%
+    ggplot(aes(x = fct_reorder(provinsi, luas_kebakaran), y = luas_kebakaran)) +
+    geom_bar(aes(fill = provinsi), stat = "identity", col = "red") +
+    # geom_boxplot(aes(fill = provinsi), col = "red", outlier.size = 3) +
+    # geom_point(aes(fill = provinsi, col = tahun), outlier.size = 3) +
+    coord_flip() +
+    guides(fill = FALSE) +
+    # geom_text(data = df_all %>%
+    #               mutate(provinsi = case_when(!provinsi %in% top_10_luas_wilayah ~ "other",
+    #                             TRUE ~ provinsi)) %>%
+    #               group_by(provinsi) %>%
+    #               top_n(1, luas_kebakaran),
+    #           aes(label = tahun), check_overlap = TRUE, col = "#ffffff", size = 6) +
+    labs(title = "Luas Area Kebakran Hutan Masing-masing Provinsi",
+         x = "Provinsi",
+         y = "Luas Area Terbakar",
+         caption = "Sumber: http://sipongi.menlhk.go.id")
+```
+
+Salah satu fakta yang mengejutkan dari terbakarnya ratusan ribu hutan di Indonesia selama 5 tahun belakangan ini adalah masuknya provinsi Nusa Tenggara Timur sebagai penyumbang terluas kedua kebakaran setelah Papua. Mengapa ini menarik? Hal ini karena faktanya, luas hutan Provinsi Nusa Tenggara Timur **tidak termasuk** dalam 10 besar wilayah hutan terluas di Indonesia. Perhatikan data berikut.
+
+```{r}
+# getting NTT index
+luas_hutan_arranged <- luas_hutan %>% 
+  group_by(provinsi) %>% 
+  summarize(luas_hutan = sum(luas_hutan)) %>% 
+  arrange(desc(luas_hutan)) %>% 
+  pull(provinsi)
+
+i_ntt <- which(luas_hutan_arranged == "Nusa Tenggara Timur")
+
+cols <- c("2019" = "green",
+          "2016" = "red",
+          "2017" = "yellow",
+          "2018" = "blue"
+        )
+
+luas_hutan %>%
+  mutate(provinsi = case_when(!provinsi %in% luas_hutan_arranged[1:i_ntt] ~ "other",
+                              TRUE ~ provinsi)) %>% 
+  ggplot(aes(x = fct_reorder(provinsi, luas_hutan))) +
+  geom_point(aes(y = luas_hutan, col = tahun), size = 3.5, pch = 8) +
+  geom_bar(aes(x = fct_reorder(provinsi, luas_hutan), y = luas_hutan), col = "#964b00", data = . %>% filter(provinsi != "other") %>%  group_by(provinsi) %>%  top_n(1, tahun), stat = "identity", width = .2) +
+  geom_point(aes(y = luas_hutan, col = tahun), size = 3.5, pch = 8) +
+  geom_text(aes(label = number_format()(luas_hutan), y = luas_hutan), data = . %>% group_by(provinsi) %>%  top_n(1, luas_hutan), col = "#f9d71c", check_overlap = TRUE, hjust = -0.1, size = 5) +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(values = cols) +
+  expand_limits(y = 32000000) +
+  coord_flip() +
+  labs(y = "Luas Wilayah Hutan",
+       x = "",
+       title = "Luas Wilayah Hutan Provinsi Indonesia",
+       subtitle = "Tahun data: 2016-2019",
+       caption = "Sumber: Badan Pusat Statistik",
+       col = "Tahun: ")
+```
+  
+  Di sini kita melihat 2 fakta, yaitu:
+  
+  1. Nusa Tenggara Timur adalah provinsi dengan urutan luas wilayah hutan ke-19 dari total 35 provinsi di Indonesia.
+  
+  2. Kita melihat warna hijau yang menunjukkan tahun 2019 mendominasi. Hal ini berarti tidak ada perubahan luas hutan yang signifikan dari tahun 2016-2019.
+  
+  Fakta ini sangatlah miris, mengingat luas hutan Nusa Tenggara Timur bukanlah yang terluas tapi memiliki luas wilayah kebakaran tertinggi kedua. Hal ini sudah sepatutnya menjadi hal yang perlu diperbaiki oleh semua stakeholder terkait.
+  
+# Tren Luas Kebakaran Hutan di NTT Cenderung yang Tertinggi
+
+```{r}
+df_all %>% 
+    mutate(provinsi = case_when(!provinsi %in% top_10_luas_wilayah ~ "other",
+                                TRUE ~ provinsi)) %>%
+    # filter(provinsi != "other") %>% 
+    ggplot(aes(x = fct_reorder(provinsi, luas_kebakaran), y = luas_kebakaran)) +
+    geom_point(aes(col = provinsi), size = 4) +
+    # geom_bar(width = 0.1, stat = "identity") +
+    coord_flip() +
+    guides(fill = FALSE) +
+    # geom_text(data = df_all %>%
+    #               mutate(provinsi = case_when(!provinsi %in% top_10_luas_wilayah ~ "other",
+    #                             TRUE ~ provinsi)) %>%
+    #               filter(provinsi != "other") %>% 
+    #               group_by(provinsi) %>%
+    #               top_n(1, luas_kebakaran),
+    #           aes(label = tahun), check_overlap = TRUE, col = "#000000", size = 6, hjust = -0.2) +
+    labs(title = "Luas Area Kebakran Hutan Masing-masing Provinsi",
+         x = "Provinsi",
+         y = "Luas Area Terbakar",
+         caption = "Sumber: http://sipongi.menlhk.go.id",
+         col = "Provinsi") +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.2),
+        legend.position = "bottom") +
+  expand_limits(y = 360000) +
+  facet_wrap(.~tahun)
+```
+
+  Selain memiliki total akumulasi luas kebakaran tertinggi kedua, data menunjukkan bahwa pada tahun 2017, 2020, dan 2021, luas wilayah kebakaran Nusa Tenggara Timur adalah yang paling tinggi di bandingkan dengan provinsi yang lainnya. Hal ini cukup menarik mengingat ternyata jumlah total titik panas di Nusa Tenggara Timur bukanlah yang tertinggi pada tahun tersebut.
+  
+```{r hostspot_provinsi}
+df_hotspot %>% 
+  group_by(tahun, provinsi) %>% 
+  summarize(jumlah_hotspot = sum(hotspot)) %>%  
+  mutate(provinsi = case_when(!provinsi %in% luas_hutan_arranged[1:i_ntt] ~ "other",
+         TRUE ~ provinsi)) %>% 
+  filter(tahun %in% c(2017, 2020, 2021), provinsi != "other") %>%
+  ggplot(aes(x = fct_reorder(provinsi, jumlah_hotspot), y = jumlah_hotspot)) +
+  geom_point(aes(col = provinsi), stat = "identity", size = 4) +
+  coord_flip() +
+  labs(x = "", y = "Jumlah Hotspot",
+       col = "Provinsi: ",
+       title = to_title_case("Distribusi titik panas per provinsi\nTahun 2017, 2020, dan 2021")
+       ) +
+  facet_wrap(.~tahun) +
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.2))
+```
+  
+  Data menunjukkan bahwa persebaran titik panas di Kalimantan Barat ternyata jauh lebih tinggi dibandingkan dengan data persebaran panas di NTT pada tahun 2017, 2020, dan 2021. Ini menujukkan bahwa jumlah titik panas yang lebih banyak tidak serta merta diikuti dengan luas area kebakaran yang signifikan. Butuh analisis lebih lanjut apakah titik panas di Kalimantan Barat ini hanya kesalahan pengukuran atau memang penaggulangannya yang lebih efektif dibandingkan dengan Nusa Tenggara Timur.
+
+# Bulan Agustus, September dan Oktober adalah Bulan Siaga!
+
+Pada dasarnya kebakaran hutan dapat dilihat dengan menggunakan citra panas yang dihasilkan oleh satelit, walaupun tidak semua titik panas adalah kebakaran hutan. Berdasarkan data historis dari satelit TERRA/AQUA yang dimiliki oleh LAPAN, terlihat bahwa pada bulan Agustus - Oktober cenderug terjadi peningkatan titik panas dalam kurun waktu 5 tahun terakhir, kemudian mengalami penurunan pada bulan setelahnya. Hal ini mengindikasikan bahwa sudah sepantasnya, pada bulan Agustus - Oktober daerah-daerah rawan kebakaran seperti Papua, Nusa Tenggara Timur, Kalimantan Tengah, Sumatera Selatan dan Kalimantan Barat harus bersiaga extra untuk mengecek dan memadamkan titik-titik panas yang terdeteksi oleh citra satelit.    
+
+```{r}
+df_hotspot %>%
+    group_by(tahun, bulan) %>% 
+    summarize(hotspot = sum(hotspot)) %>% 
+    ggplot(aes(y = tahun, x = bulan)) +
+    geom_hline(yintercept = seq(2016, 2021, by = 1), col = "gray", size = 0.05) +
+    scale_size_area(max_size = 20, guide = FALSE) +
+    # scale_y_reverse(limits = c(2021,2016), breaks = c(2016, 2018, 2021)) +
+    scale_y_continuous(labels = function(x) ifelse(x == 2021, paste0(x, "*"), x), breaks = c(2017, 2019, 2021)) +
+    scale_x_date(date_breaks = "months", date_labels = "%b") +
+    labs(title = "Hotspot Per Month Over Years", subtitle = "Years: 2016-2021",
+         x = "", y = "", caption = "Sumber: http://sipongi.menlhk.go.id\nSatelit: TERRA/AQUA (LAPAN)\n*) data berjalan") +
+    theme_hc(style = "darkunica", base_size = 20, base_family = "ProximaNova-Semibold") +
+    theme(axis.text = element_text(color = "#ffffff")) +
+    geom_point(aes(size = hotspot), col = "#ffa500") +
+    geom_text(aes(label = number_format(accuracy = 1)(hotspot)), check_overlap = TRUE, col = "red", vjust = -1, size = 5) +
+    expand_limits(y = 2022)
+```
+
+# Miris! Tingkat Rata-rata Reboisasi Hutan Hanya Mencapai 4.4%
+
+Kebakaran hutan akan secara signifikan mengurangi luas vegetasi hutan yang tersedia. Seperti yang kita ketahui, salah satu cara untuk mempercepat kembalinya vegetasi ini adalah dengan melakukan reboisasi atau penanaman kembali hutan yang gundul. Namun sayangnya, data menunjukkan bahwa reboisasi hutan tidak mampu mengimbangi kerusakan vegetasi hutan yang terjadi akibat kebakaran hutan, belum lagi akibat pembalakan liar dan faktor lainnya.
+
+
+```{r}
+df_all %>% 
+  full_join(reboisasi_hutan, by = c("provinsi", "tahun")) %>%
+  group_by(tahun) %>% 
+  summarize(luas_reboisasi = sum(luas_reboisasi, na.rm = TRUE),
+            luas_kebakaran = sum(luas_kebakaran, na.rm = TRUE)) %>% 
+  mutate(luas_reboisasi = luas_reboisasi/luas_kebakaran,
+         luas_kebakaran = 1 - luas_reboisasi) %>% 
+  filter(!tahun %in% c(2014,2015,2020,2021)) %>% 
+  gather(kategori, nilai, luas_reboisasi:luas_kebakaran) %>%
+  group_by(tahun) %>% 
+  mutate(ypos = cumsum(nilai)- 0.5*nilai ) %>% 
+  ggplot(aes(x = "")) +
+  geom_bar(aes(y = nilai, fill = kategori), stat = "identity") +
+  scale_fill_brewer(palette="Set1") +
+  facet_wrap(~tahun) +
+  coord_polar("y") +
+  theme_void() +
+  theme(
+      plot.background = element_rect(fill = "black"),
+      text = element_text(colour = "white", face = "bold"),
+      axis.text = element_blank()
+  ) +
+  geom_text(aes(y = ypos, label = paste0(to_title_case(gsub("_", " ", kategori)), ": ", number_format(accuracy = 0.1)(nilai*100), "%")), data = . %>% filter(nilai > 0.016), color = "white", size=6) +
+  labs(caption = "Sumber: http://sipongi.menlhk.go.id\nBadan Pusat Statistik")
+```
+
+# Kesimpulan
+
+Dari Analisis data kebakaran hutan ini, ada beberapa kesimpulan yang bisa diambil.
+
+1. Ratusan ribu hutan masih terbakar setiap tahunnya. Hal ini jelas membutuhkan partisipasi dari seluruh stakeholder untuk sama-sama meminimalisir terjadi-nya kebakaran hutan.
+
+2. Jutaan ton gas CO2 dihasilkan setiap tahunnya akibat dari kebakaran hutan. Gas CO2 adalah gas rumah kaca yang dapat memperparah pemanasan global.
+
+3. NTT perlu meningkatkan kewaspadaan dan kesiagaan terhadap kejadian kebakaran hutan. Hal ini dikarenakan dengan jumlah titik panas yang relatif lebih kecil dari Kalimantan Barat, dapat menyebabkan luas kebakaran yang lebih besar.
+
+4. Perlunya pengetatan pengawasan hutan pada bulan Agustus - Oktober setiap tahunnya. Berdasarkan data yang didapat dari citra satelit, pada bulan ini, sering sekali terjadi lonjakan jumlah titik panas (hotspot).
+
+5. Reboisasi hutan Indonesia masih sangat jauh dari kata mencukupi untuk menanggulangi akibat dari kebakaran hutan. Dibutuhkan partisipasi dan kesadaran dari seluruh pihak untuk meningkatkan dan menggalakkan program reboisasi ini.
+
+[Inspirasi Analisa:  Paldhous](https://buzzfeednews.github.io/2018-07-wildfire-trends/)
